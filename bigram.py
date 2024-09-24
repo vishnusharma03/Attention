@@ -12,6 +12,7 @@ learning_rate = 1e-3
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 eval_iter = 200
 n_embed = 32
+n_head = 4
 head_size = 8
 
 # wget https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt
@@ -62,6 +63,20 @@ def estimate_loss():
     model.train()
     return out
 
+class Block(nn.Module):
+    """Transformer block: Communincation followed by computation/feedforward"""
+
+    def __init__(self, n_embed, head_size): # n_embed: embedding dimension, n_head: the number of heads we want to use
+        super().__init__()
+        head_size = n_embed // n_head
+        self.attn = MultiHeadAttention(n_head, head_size)
+        self.ffwd = FeedForward(n_embed)
+
+    def forward(self, x):
+        x = self.attn(x)
+        x = self.ffwd(x)
+        return x
+
 class FeedForward(nn.Module):
     """ A simple linear layer followed by a ReLU activation"""
 
@@ -111,8 +126,14 @@ class BigramLanguageModel(nn.Module):
         super().__init__()
         self.token_embedding_table = nn.Embedding(vocab_size, n_embed)
         self.position_embedding_table = nn.Embedding(block_size, n_embed)
-        self.sa_heads = MultiHeadAttention(num_heads=4, head_size=n_embed//4)
-        self.ffwd = FeedForward(n_embed)
+        self.blocks = nn.Sequential(
+            Block(n_embed, head_size),
+            Block(n_embed, head_size),
+            Block(n_embed, head_size),
+            Block(n_embed, head_size),
+        )
+        # self.sa_heads = MultiHeadAttention(num_heads=4, head_size=n_embed//4)
+        # self.ffwd = FeedForward(n_embed)
         self.lm_head = nn.Linear(n_embed, vocab_size)
 
     def forward(self, idx, targets=None):
@@ -121,8 +142,7 @@ class BigramLanguageModel(nn.Module):
         tok_emb = self.token_embedding_table(idx) # (This will be in the dimension of Batch x Time x Channels)
         pos_emb = self.position_embedding_table(torch.arange(T, device=device)) # (T, C) -> (1, T, C)
         x = tok_emb + pos_emb # (B, T, C); x holds the positional embeddings & token embeddings
-        x = self.sa_heads(x) # (B, T, C)
-        x = self.ffwd(x) # (B, T, C)
+        x = self.blocks(x) # (B, T, C)
         logits = self.lm_head(x) # (This will be in the dimension of Batch x Time x Vocab_size)
 
         if targets is None:
