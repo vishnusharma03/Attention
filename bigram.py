@@ -7,11 +7,12 @@ torch.manual_seed(1337)
 batch_size = 32
 block_size = 8
 max_iter = 10000
-eval_interval = 300
+eval_interval = 500
 learning_rate = 1e-3
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 eval_iter = 200
 n_embed = 32
+head_size = 8
 
 # wget https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt
 
@@ -61,24 +62,52 @@ def estimate_loss():
     model.train()
     return out
 
+class Head(nn.Module):
+    """One of the self attention heads"""
+    def __init__(self, head_size):
+        super().__init__()
+        self.key = nn.Linear(n_embed, head_size, bias=False)
+        self.query = nn.Linear(n_embed, head_size, bias=False)
+        self.value = nn.Linear(n_embed, head_size, bias=False)
+        self.register_buffer("tril", torch.tril(torch.ones(block_size, block_size))) 
+
+    def forward(self, x):
+        B,T,C = x.shape
+        k = self.key(x) # (B, T, C)
+        q = self.query(x) # (B, T, C)
+        # computing attention scores ('affinities')
+        wei = q @ k.transpose(-2, -1) * C**-0.5 # (B, T, C) @ (B, C, T) -> (B, T, T)
+        wei = wei.masked_fill(self.tril[:T, :T]==0, float('-inf')) # (B, T, T)
+        wei = F.softmax(wei, dim=-1) # (B, T, T)
+
+        # performing the weighted sum
+        v = self.value(x) # (B, T, C)
+        out = wei @ v # (B, T, T) @ (B, T, C) -> (B, T, C)
+        return out
 
 class BigramLanguageModel(nn.Module):
 
     def __init__(self):
         super().__init__()
         self.token_embedding_table = nn.Embedding(vocab_size, n_embed)
+        self.position_embedding_table = nn.Embedding(block_size, n_embed)
+        self.sa_head = Head(n_embed) 
         self.lm_head = nn.Linear(n_embed, vocab_size)
 
     def forward(self, idx, targets=None):
+        B,T = idx.shape # Batch size and Time
 
         tok_emb = self.token_embedding_table(idx) # (This will be in the dimension of Batch x Time x Channels)
-        logits = self.lm_head(tok_emb) # (This will be in the dimension of Batch x Time x Vocab_size)
+        pos_emb = self.position_embedding_table(torch.arange(T, device=device)) # (T, C) -> (1, T, C)
+        x = tok_emb + pos_emb # (B, T, C); x holds the positional embeddings & token embeddings
+        x = self.sa_head(x) # (B, T, C)
+        logits = self.lm_head(x) # (This will be in the dimension of Batch x Time x Vocab_size)
 
         if targets is None:
             loss = None
         else:
             B, T, C = logits.shape
-            logits = logits.view(B*T, C) 
+            logits = logits.view(B*T, C)   
             targets = targets.view(B*T)
             loss = F.cross_entropy(logits, targets)
 
@@ -86,7 +115,8 @@ class BigramLanguageModel(nn.Module):
 
     def generate(self, idx, max_new_tokens): # idx is (B,T) array of indices in the current context
         for _ in range(max_new_tokens):
-            logits, loss = self(idx) # getting the predictions
+            idx_cond = idx[:, -block_size:]  # Crop the context so that tokens does not exceed block_size otherwise 
+            logits, loss = self(idx_cond) # getting the predictions
             logits = logits[:, -1, :] # plucking out the last step result
             probs = F.softmax(logits, dim=-1) # getting the probabilities
             idx_next = torch.multinomial(probs, num_samples=1) # sample from distribution
