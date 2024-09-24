@@ -62,6 +62,26 @@ def estimate_loss():
     model.train()
     return out
 
+class FeedForward(nn.Module):
+    """ A simple linear layer followed by a ReLU activation"""
+
+    def __init__(self, n_embed):
+        super().__init__()
+        self.net = nn.Sequential(nn.Linear(n_embed, n_embed), nn.ReLU())
+    
+    def forward(self, x):
+        return self.net(x)
+
+class MultiHeadAttention(nn.Module):
+    """Multiple self attention heads running in parallel"""
+    
+    def __init__(self, num_heads, head_size):
+        super().__init__()
+        self.heads = nn.ModuleList([Head(head_size) for _ in range(num_heads)])
+        
+    def forward(self, x):
+        return torch.cat([h(x) for h in self.heads], dim=-1) # concatenating the heads in the channel dimension
+
 class Head(nn.Module):
     """One of the self attention heads"""
     def __init__(self, head_size):
@@ -91,7 +111,8 @@ class BigramLanguageModel(nn.Module):
         super().__init__()
         self.token_embedding_table = nn.Embedding(vocab_size, n_embed)
         self.position_embedding_table = nn.Embedding(block_size, n_embed)
-        self.sa_head = Head(n_embed) 
+        self.sa_heads = MultiHeadAttention(num_heads=4, head_size=n_embed//4)
+        self.ffwd = FeedForward(n_embed)
         self.lm_head = nn.Linear(n_embed, vocab_size)
 
     def forward(self, idx, targets=None):
@@ -100,7 +121,8 @@ class BigramLanguageModel(nn.Module):
         tok_emb = self.token_embedding_table(idx) # (This will be in the dimension of Batch x Time x Channels)
         pos_emb = self.position_embedding_table(torch.arange(T, device=device)) # (T, C) -> (1, T, C)
         x = tok_emb + pos_emb # (B, T, C); x holds the positional embeddings & token embeddings
-        x = self.sa_head(x) # (B, T, C)
+        x = self.sa_heads(x) # (B, T, C)
+        x = self.ffwd(x) # (B, T, C)
         logits = self.lm_head(x) # (This will be in the dimension of Batch x Time x Vocab_size)
 
         if targets is None:
@@ -126,9 +148,10 @@ class BigramLanguageModel(nn.Module):
 
 model = BigramLanguageModel()
 m = model.to(device)
+print(device)
 
 
-optimizer = torch.optim.AdamW(m.parameters(), lr=1e-3)
+optimizer = torch.optim.AdamW(m.parameters(), lr=learning_rate)
 
 for iter in range(max_iter):
 
