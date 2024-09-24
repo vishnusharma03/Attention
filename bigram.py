@@ -71,10 +71,12 @@ class Block(nn.Module):
         head_size = n_embed // n_head
         self.attn = MultiHeadAttention(n_head, head_size)
         self.ffwd = FeedForward(n_embed)
+        self.ln1 = nn.LayerNorm(n_embed)
+        self.ln2 = nn.LayerNorm(n_embed)
 
     def forward(self, x):
-        x = self.attn(x)
-        x = self.ffwd(x)
+        x = self.attn(self.ln1(x))
+        x = self.ffwd(self.ln2(x))
         return x
 
 class FeedForward(nn.Module):
@@ -131,6 +133,7 @@ class BigramLanguageModel(nn.Module):
             Block(n_embed, head_size),
             Block(n_embed, head_size),
             Block(n_embed, head_size),
+            nn.LayerNorm(n_embed),
         )
         # self.sa_heads = MultiHeadAttention(num_heads=4, head_size=n_embed//4)
         # self.ffwd = FeedForward(n_embed)
